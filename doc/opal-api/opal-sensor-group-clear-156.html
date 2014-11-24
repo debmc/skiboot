@@ -1,0 +1,149 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>OPAL_SENSOR_GROUP_CLEAR &#8212; skiboot v6.3-rc3
+ documentation</title>
+    <link rel="stylesheet" href="../_static/classic.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../_static/jquery.js"></script>
+    <script type="text/javascript" src="../_static/underscore.js"></script>
+    <script type="text/javascript" src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="OPAL_SENSOR_GROUP_ENABLE" href="opal-sensor-group-enable-163.html" />
+    <link rel="prev" title="OPAL_RTC_WRITE" href="opal-rtc-write-4.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="opal-sensor-group-enable-163.html" title="OPAL_SENSOR_GROUP_ENABLE"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="opal-rtc-write-4.html" title="OPAL_RTC_WRITE"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">skiboot v6.3-rc3
+ documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">OPAL API Documentation</a> &#187;</li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <div class="section" id="opal-sensor-group-clear">
+<span id="opal-sensor-groups-clear"></span><h1>OPAL_SENSOR_GROUP_CLEAR<a class="headerlink" href="#opal-sensor-group-clear" title="Permalink to this headline">¶</a></h1>
+<p>OPAL call to clear the sensor groups data using a handle to identify
+the type of sensor group which is exported via DT.</p>
+<p>The call can be asynchronus, where the token parameter is used to wait
+for the completion.</p>
+<div class="section" id="parameters">
+<h2>Parameters<a class="headerlink" href="#parameters" title="Permalink to this headline">¶</a></h2>
+<dl class="docutils">
+<dt>::</dt>
+<dd>u32 handle
+int token</dd>
+</dl>
+</div>
+<div class="section" id="returns">
+<h2>Returns<a class="headerlink" href="#returns" title="Permalink to this headline">¶</a></h2>
+<dl class="docutils">
+<dt>OPAL_SUCCESS</dt>
+<dd>Success</dd>
+<dt>OPAL_UNSUPPORTED</dt>
+<dd>No support for clearing the sensor group</dd>
+<dt>OPAL_HARDWARE</dt>
+<dd>Unable to procced due to the current hardware state</dd>
+<dt>OPAL_PERMISSION</dt>
+<dd>Hardware cannot take the request</dd>
+<dt>OPAL_ASYNC_COMPLETION</dt>
+<dd>Request was sent and an async completion message will be sent with
+token and status of the request.</dd>
+<dt>OPAL_BUSY</dt>
+<dd>Previous request in progress</dd>
+<dt>OPAL_INTERNAL_ERROR</dt>
+<dd>Error in request response</dd>
+<dt>OPAL_TIMEOUT</dt>
+<dd>Timeout in request completion</dd>
+</dl>
+</div>
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table Of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">OPAL_SENSOR_GROUP_CLEAR</a><ul>
+<li><a class="reference internal" href="#parameters">Parameters</a></li>
+<li><a class="reference internal" href="#returns">Returns</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="opal-rtc-write-4.html"
+                        title="previous chapter">OPAL_RTC_WRITE</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="opal-sensor-group-enable-163.html"
+                        title="next chapter">OPAL_SENSOR_GROUP_ENABLE</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/opal-api/opal-sensor-group-clear-156.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="opal-sensor-group-enable-163.html" title="OPAL_SENSOR_GROUP_ENABLE"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="opal-rtc-write-4.html" title="OPAL_RTC_WRITE"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">skiboot v6.3-rc3
+ documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" >OPAL API Documentation</a> &#187;</li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright 2016-2017, IBM, others.
+      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 1.7.6.
+    </div>
+  </body>
+</html>
