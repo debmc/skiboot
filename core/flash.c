@@ -10,6 +10,7 @@
 
 #include <skiboot.h>
 #include <cpu.h>
+#include <inttypes.h>
 #include <lock.h>
 #include <opal.h>
 #include <opal-msg.h>
@@ -436,8 +437,10 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 		goto err;
 	}
 
-	if (size >= flash->size || offset >= flash->size
+	if (size > flash->size || offset >= flash->size
 			|| offset + size > flash->size) {
+		prlog(PR_DEBUG, "Requested flash op %d beyond flash size %" PRIu64 "\n",
+				op, flash->size);
 		rc = OPAL_PARAMETER;
 		goto err;
 	}
