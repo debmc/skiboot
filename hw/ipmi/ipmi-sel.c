@@ -463,7 +463,7 @@ static void sel_pnor(uint8_t access, void *context __unused)
 			break;
 		}
 
-		granted = flash_reserve();
+		granted = system_flash_reserve();
 		if (granted)
 			occ_pnor_set_owner(PNOR_OWNER_EXTERNAL);
 		/* Ack the request */
@@ -472,7 +472,7 @@ static void sel_pnor(uint8_t access, void *context __unused)
 		break;
 	case RELEASE_PNOR:
 		prlog(PR_NOTICE, "PNOR access released\n");
-		flash_release();
+		system_flash_release();
 		occ_pnor_set_owner(PNOR_OWNER_HOST);
 		break;
 	default:
