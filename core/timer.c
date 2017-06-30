@@ -210,6 +210,7 @@ static void __check_poll_timers(uint64_t now)
 static void __check_timers(uint64_t now)
 {
 	struct timer *t;
+	uint64_t stop = now + msecs_to_tb(50); /* Run timers for max 5ms */
 
 	for (;;) {
 		t = list_top(&timer_list, struct timer, link);
@@ -240,6 +241,13 @@ static void __check_timers(uint64_t now)
 
 		/* Update time stamp */
 		now = mftb();
+
+		/* Only run timers for a limited time to avoid jitter */
+		if (now > stop) {
+			prlog(PR_TRACE, "Run timers for > 50ms total elapsed time=%lu\n",
+				tb_to_msecs(now - stop)+50);
+			break;
+		}
 	}
 }
 

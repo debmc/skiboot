@@ -25,7 +25,23 @@
 #include <libstb/trustedboot.h>
 #include <libxz/xz.h>
 #include <elf.h>
+#include <timer.h>
 #include <timebase.h>
+
+enum flash_op {
+	FLASH_OP_READ,
+	FLASH_OP_WRITE,
+	FLASH_OP_ERASE,
+};
+
+struct flash_async_info {
+	enum flash_op op;
+	struct timer poller;
+	uint64_t token;
+	uint64_t pos;
+	uint64_t len;
+	uint64_t buf;
+};
 
 struct flash {
 	struct list_node	list;
@@ -35,6 +51,7 @@ struct flash {
 	uint64_t		size;
 	uint32_t		block_size;
 	int			id;
+	struct flash_async_info async;
 };
 
 static struct {
@@ -234,6 +251,54 @@ static int flash_nvram_probe(struct flash *flash, struct ffs_handle *ffs)
 
 /* core flash support */
 
+/*
+ * Called with flash lock held, drop it on async completion
+ */
+static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unused)
+{
+	struct flash *flash = data;
+	uint64_t offset, buf, len;
+	int rc;
+
+	offset = flash->async.pos;
+	buf = flash->async.buf;
+	len = MIN(flash->async.len, flash->block_size*10);
+	printf("Flash poll op %d len %llu\n", flash->async.op, len);
+
+	switch (flash->async.op) {
+	case FLASH_OP_READ:
+		rc = blocklevel_raw_read(flash->bl, offset, (void *)buf, len);
+		break;
+	case FLASH_OP_WRITE:
+		rc = blocklevel_raw_write(flash->bl, offset, (void *)buf, len);
+		break;
+	case FLASH_OP_ERASE:
+		rc = blocklevel_erase(flash->bl, offset, len);
+		break;
+	default:
+		assert(0);
+	}
+
+	if (rc)
+		rc = OPAL_HARDWARE;
+
+	flash->async.pos += len;
+	flash->async.buf += len;
+	flash->async.len -= len;
+	if (!rc && flash->async.len) {
+		/*
+		 * We want to get called pretty much straight away, just have
+		 * to be sure that we jump back out to Linux so that if this
+		 * very long we don't cause RCU or the scheduler to freak
+		 */
+		schedule_timer(&flash->async.poller, 0);
+		return;
+	}
+
+	opal_queue_msg(OPAL_MSG_ASYNC_COMP, NULL, NULL, flash->async.token, rc);
+	flash_release(flash);
+}
+
 static struct dt_node *flash_add_dt_node(struct flash *flash, int id)
 {
 	int i;
@@ -389,6 +454,7 @@ int flash_register(struct blocklevel_device *bl)
 	flash->size = size;
 	flash->block_size = block_size;
 	flash->id = num_flashes();
+	init_timer(&flash->async.poller, flash_poll, flash);
 
 	rc = ffs_init(0, flash->size, bl, &ffs, 1);
 	if (rc) {
@@ -417,16 +483,11 @@ int flash_register(struct blocklevel_device *bl)
 	return OPAL_SUCCESS;
 }
 
-enum flash_op {
-	FLASH_OP_READ,
-	FLASH_OP_WRITE,
-	FLASH_OP_ERASE,
-};
-
 static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 		uint64_t buf, uint64_t size, uint64_t token)
 {
 	struct flash *flash = NULL;
+	uint64_t len;
 	int rc;
 
 	list_for_each(&flashes, flash, list)
@@ -445,8 +506,16 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 		prlog(PR_DEBUG, "Requested flash op %d beyond flash size %" PRIu64 "\n",
 				op, flash->size);
 		rc = OPAL_PARAMETER;
-		goto err;
+		goto out;
 	}
+
+	len = MIN(size, flash->block_size*10);
+	printf("Flash op %d len %llu\n", op, len);
+	flash->async.op = op;
+	flash->async.token = token;
+	flash->async.buf = buf + len;
+	flash->async.len = size - len;
+	flash->async.pos = offset + len;
 
 	/*
 	 * These ops intentionally have no smarts (ecc correction or erase
@@ -457,29 +526,43 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 	 */
 	switch (op) {
 	case FLASH_OP_READ:
-		rc = blocklevel_raw_read(flash->bl, offset, (void *)buf, size);
+		rc = blocklevel_raw_read(flash->bl, offset, (void *)buf, len);
 		break;
 	case FLASH_OP_WRITE:
-		rc = blocklevel_raw_write(flash->bl, offset, (void *)buf, size);
+		rc = blocklevel_raw_write(flash->bl, offset, (void *)buf, len);
 		break;
 	case FLASH_OP_ERASE:
-		rc = blocklevel_erase(flash->bl, offset, size);
+		rc = blocklevel_erase(flash->bl, offset, len);
 		break;
 	default:
 		assert(0);
 	}
 
 	if (rc) {
+		prlog(PR_ERR, "%s: Op %d failed with rc %d\n", __func__, op, rc);
 		rc = OPAL_HARDWARE;
-		goto err;
+		goto out;
 	}
 
-	flash_release(flash);
-
-	opal_queue_msg(OPAL_MSG_ASYNC_COMP, NULL, NULL, token, rc);
-	return OPAL_ASYNC_COMPLETION;
-
-err:
+	if (size - len) {
+		/* Work remains */
+		schedule_timer(&flash->async.poller, 0);
+		/* Don't release the flash */
+		return OPAL_ASYNC_COMPLETION;
+	} else {
+		/*
+		 * As tempting as it might be here to return OPAL_SUCCESS
+		 * here, don't! As of 1/07/2017 the powernv_flash driver in
+		 * Linux will handle OPAL_SUCCESS as an error, the only thing
+		 * that makes it handle things as though they're working is
+		 * receiving OPAL_ASYNC_COMPLETION.
+		 *
+		 * XXX TODO: Revisit this in a few years *sigh*
+		 */
+		opal_queue_msg(OPAL_MSG_ASYNC_COMP, NULL, NULL, flash->async.token, rc);
+	}
+	rc = OPAL_ASYNC_COMPLETION;
+out:
 	flash_release(flash);
 	return rc;
 }
