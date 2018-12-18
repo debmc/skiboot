@@ -75,6 +75,14 @@ static bool qemu_probe_powernv10(void)
 	return qemu_probe_common("qemu,powernv10");
 }
 
+static int qemu_heartbeat_time(void)
+{
+	/*
+	 * Fast polling to make up for lack of SBE timers
+	 */
+	return 1;
+}
+
 static void qemu_init(void)
 {
 	if (!bt_device_present) {
@@ -94,6 +102,7 @@ DECLARE_PLATFORM(qemu) = {
 	.pci_get_slot_info = slot_table_get_slot_info,
 	.start_preload_resource	= flash_start_preload_resource,
 	.resource_loaded	= flash_resource_loaded,
+	.heartbeat_time		= qemu_heartbeat_time,
 	.terminate	= ipmi_terminate,
 };
 
