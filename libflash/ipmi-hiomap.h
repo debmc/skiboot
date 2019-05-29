@@ -10,12 +10,36 @@
 
 #include "blocklevel.h"
 
-enum lpc_window_state { closed_window, read_window, write_window };
+/*
+ * we basically check for a quick response
+ * otherwise we catch the updated window in the next cycle
+ */
+#define IPMI_HIOMAP_TICKS 5
+#define IPMI_HIOMAP_TICKS_DEFAULT 0
+
+/* time to wait for write/erase/dirty ops */
+#define IPMI_LONG_TICKS 500
+
+/*
+ * default for ack'ing typically 1-10 wait_time's
+ * allow upper bounds because if we cannot ack
+ * we make no forward progress post protocol reset
+ * async paths will retry
+ * sync paths always hit with zero wait_time elapsed
+ * with ASYNC_REQUIRED masked out, this is not used
+ */
+#define IPMI_ACK_DEFAULT 500
+
+/* increment to skip the waiting loop */
+#define IPMI_SKIP_INC 2
+
+enum lpc_window_state { closed_window, read_window, write_window, moving_window };
 
 struct lpc_window {
 	uint32_t lpc_addr; /* Offset into LPC space */
 	uint32_t cur_pos;  /* Current position of the window in the flash */
 	uint32_t size;     /* Size of the window into the flash */
+	uint32_t adjusted_window_size; /* store adjusted window size */
 };
 
 struct ipmi_hiomap {
@@ -35,6 +59,21 @@ struct ipmi_hiomap {
 	 * three variables are protected by lock to avoid conflict.
 	 */
 	struct lock lock;
+	struct lock transaction_lock;
+
+	/* callers transaction info */
+	uint64_t *active_size;
+	uint64_t requested_len;
+	uint64_t requested_pos;
+	uint64_t tracking_len;
+	uint64_t tracking_pos;
+	void *tracking_buf;
+
+	int missed_cc_count;
+	int cc;
+	/* inflight_seq used to aide debug */
+	/* with other OPAL ipmi msg's      */
+	uint8_t inflight_seq;
 	uint8_t bmc_state;
 	enum lpc_window_state window_state;
 };

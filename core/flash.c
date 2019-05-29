@@ -28,6 +28,18 @@
 #include <timer.h>
 #include <timebase.h>
 
+/*
+ * need to keep this under the BT queue limit
+ * causes are when ipmi to bmc gets bogged down
+ * delay allows for congestion to clear
+ */
+#define FLASH_RETRY_LIMIT 10
+/*
+ * schedule delay manages async flash
+ * transaction work for the block layer
+ */
+#define FLASH_SCHEDULE_DELAY 200
+
 enum flash_op {
 	FLASH_OP_READ,
 	FLASH_OP_WRITE,
@@ -41,6 +53,9 @@ struct flash_async_info {
 	uint64_t pos;
 	uint64_t len;
 	uint64_t buf;
+	int retry_counter;
+	int transaction_id;
+	int in_progress_schedule_delay;
 };
 
 struct flash {
@@ -80,13 +95,63 @@ static u32 nvram_offset, nvram_size;
 static bool flash_reserve(struct flash *flash)
 {
 	bool rc = false;
+	int lock_try_counter = 10;
+	uint64_t now;
+	uint64_t start_time;
+	uint64_t wait_time;
+	uint64_t flash_reserve_ticks = 10;
+	uint64_t timeout_counter;
 
-	if (!try_lock(&flash_lock))
+	start_time = mftb();
+	now = mftb();
+	wait_time = tb_to_msecs(now - start_time);
+	timeout_counter = 0;
+
+
+	while (wait_time < flash_reserve_ticks) {
+		++timeout_counter;
+		if (timeout_counter % 4 == 0) {
+			now = mftb();
+			wait_time = tb_to_msecs(now - start_time);
+		}
+		if (flash->busy == false) {
+			break;
+		}
+	}
+
+	while (!try_lock(&flash_lock)) {
+		--lock_try_counter;
+		if (lock_try_counter == 0) {
+			break;
+		}
+	}
+
+	if (lock_try_counter == 0) {
 		return false;
+	}
+
+	/* we have the lock if we got here */
 
 	if (!flash->busy) {
 		flash->busy = true;
 		rc = true;
+	} else {
+		/* probably beat a flash_release and grabbed the lock */
+		unlock(&flash_lock);
+		while (!try_lock(&flash_lock)) {
+			--lock_try_counter;
+			if (lock_try_counter == 0) {
+				break;
+			}
+		}
+		if (lock_try_counter == 0) {
+			return false;
+		}
+		/* we have the lock if we are here */
+		if (!flash->busy) {
+			flash->busy = true;
+			rc = true;
+		}
 	}
 	unlock(&flash_lock);
 
@@ -279,12 +344,32 @@ static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unus
 		assert(0);
 	}
 
-	if (rc)
-		rc = OPAL_HARDWARE;
+	if (rc == 0) {
+		/*
+		 * if we are good to proceed forward
+		 * otherwise we may have to try again
+		 */
+		flash->async.pos += len;
+		flash->async.buf += len;
+		flash->async.len -= len;
+		/* if we good clear */
+		flash->async.retry_counter = 0;
+		/*
+		 * clear the IN_PROGRESS flags
+		 * we only need IN_PROGRESS active on missed_cc
+		 */
+		flash->bl->flags &= ~IN_PROGRESS;
+		/* reset time for scheduling gap */
+		flash->async.in_progress_schedule_delay = FLASH_SCHEDULE_DELAY;
+	}
 
-	flash->async.pos += len;
-	flash->async.buf += len;
-	flash->async.len -= len;
+	/*
+	 * corner cases if the move window misses and
+	 * the chunk straddles the current window we will 
+	 * adjust the size down to allow forward progress
+	 * if timing good on move_cb the world is good
+	 */
+
 	if (!rc && flash->async.len) {
 		/*
 		 * We want to get called pretty much straight away, just have
@@ -293,10 +378,36 @@ static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unus
 		 */
 		schedule_timer(&flash->async.poller, 0);
 		return;
+	} else {
+		if (rc == FLASH_ERR_ASYNC_WORK) {
+			++flash->async.retry_counter;
+			flash->async.in_progress_schedule_delay += FLASH_SCHEDULE_DELAY;
+			if (flash->async.retry_counter >= FLASH_RETRY_LIMIT) {
+				rc = OPAL_HARDWARE;
+				prlog(PR_TRACE, "flash_poll PROBLEM FLASH_RETRY_LIMIT of %i reached on transaction_id=%i\n",
+					FLASH_RETRY_LIMIT,
+					flash->async.transaction_id);
+			} else {
+				/*
+				 * give the BT time to work and receive response
+				 * throttle back to allow for congestion to clear
+				 * cases observed were complete lack of ipmi response until very late
+				 * or cases immediately following an unaligned window read/move (so slow)
+				 */
+				flash->bl->flags |= IN_PROGRESS;
+				schedule_timer(&flash->async.poller, msecs_to_tb(flash->async.in_progress_schedule_delay));
+				return;
+			}
+		} else if (rc != 0) {
+			rc = OPAL_HARDWARE;
+		}
 	}
 
-	opal_queue_msg(OPAL_MSG_ASYNC_COMP, NULL, NULL, flash->async.token, rc);
+	flash->bl->flags &= ~IN_PROGRESS;
+	flash->bl->flags &= ~ASYNC_REQUIRED;
+	/* release the flash before we allow next opal entry */
 	flash_release(flash);
+	opal_queue_msg(OPAL_MSG_ASYNC_COMP, NULL, NULL, flash->async.token, rc);
 }
 
 static struct dt_node *flash_add_dt_node(struct flash *flash, int id)
@@ -454,6 +565,7 @@ int flash_register(struct blocklevel_device *bl)
 	flash->size = size;
 	flash->block_size = block_size;
 	flash->id = num_flashes();
+	flash->async.transaction_id = 0;
 	init_timer(&flash->async.poller, flash_poll, flash);
 
 	rc = ffs_init(0, flash->size, bl, &ffs, 1);
@@ -487,7 +599,7 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 		uint64_t buf, uint64_t size, uint64_t token)
 {
 	struct flash *flash = NULL;
-	uint64_t len;
+	uint64_t len = 0;
 	int rc;
 
 	list_for_each(&flashes, flash, list)
@@ -516,6 +628,10 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 	flash->async.buf = buf + len;
 	flash->async.len = size - len;
 	flash->async.pos = offset + len;
+	flash->async.retry_counter = 0;
+	flash->async.in_progress_schedule_delay = FLASH_SCHEDULE_DELAY;
+	flash->bl->flags |= ASYNC_REQUIRED;
+	++flash->async.transaction_id;
 
 	/*
 	 * These ops intentionally have no smarts (ecc correction or erase
@@ -539,15 +655,34 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 	}
 
 	if (rc) {
-		prlog(PR_ERR, "%s: Op %d failed with rc %d\n", __func__, op, rc);
-		rc = OPAL_HARDWARE;
+		if (rc == FLASH_ERR_ASYNC_WORK) {
+			++flash->async.retry_counter;
+			flash->async.buf = buf;
+			flash->async.len = size;
+			flash->async.pos = offset;
+			/* for completeness, opal_flash_op is first time pass so unless the retry limit set to 1 */
+			if (flash->async.retry_counter >= FLASH_RETRY_LIMIT) {
+				rc = OPAL_HARDWARE;
+				prlog(PR_TRACE, "opal_flash_op PROBLEM FLASH_RETRY_LIMIT of %i reached on transaction_id=%i\n",
+					FLASH_RETRY_LIMIT,
+					flash->async.transaction_id);
+				goto out;
+			}
+			flash->bl->flags |= IN_PROGRESS;
+			schedule_timer(&flash->async.poller, msecs_to_tb(FLASH_SCHEDULE_DELAY));
+			/* Don't release the flash, we need to hold lock to continue transaction */
+			return OPAL_ASYNC_COMPLETION;
+		} else {
+			prlog(PR_ERR, "%s: Op %d failed with rc %d\n", __func__, op, rc);
+			rc = OPAL_HARDWARE;
+		}
 		goto out;
 	}
 
 	if (size - len) {
 		/* Work remains */
 		schedule_timer(&flash->async.poller, 0);
-		/* Don't release the flash */
+		/* Don't release the flash, we need to hold lock to continue transaction */
 		return OPAL_ASYNC_COMPLETION;
 	} else {
 		/*
@@ -564,6 +699,8 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 	rc = OPAL_ASYNC_COMPLETION;
 out:
 	flash_release(flash);
+	flash->bl->flags &= ~IN_PROGRESS;
+	flash->bl->flags &= ~ASYNC_REQUIRED;
 	return rc;
 }
 

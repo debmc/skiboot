@@ -20,6 +20,8 @@ struct blocklevel_range {
 
 enum blocklevel_flags {
 	WRITE_NEED_ERASE = 1,
+	ASYNC_REQUIRED = 4,
+	IN_PROGRESS = 8,
 };
 
 /*

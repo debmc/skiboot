@@ -21,6 +21,7 @@
 #define FLASH_ERR_BAD_READ		15
 #define FLASH_ERR_DEVICE_GONE	16
 #define FLASH_ERR_AGAIN	17
+#define FLASH_ERR_ASYNC_WORK	18
 
 #ifdef __SKIBOOT__
 #include <skiboot.h>
