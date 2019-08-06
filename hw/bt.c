@@ -463,8 +463,12 @@ static void bt_send_and_unlock(void)
 	 * Timeouts and retries happen in bt_expire_old_msg()
 	 * called from bt_poll()
 	 */
-	if (bt_idle() && inflight_bt_msg->send_count == 0)
+	if (bt_idle() && inflight_bt_msg->send_count == 0) {
+#if BT_QUEUE_DEBUG
+		BT_Q_DBG(inflight_bt_msg, "Sending inflight_bt_msg NOW");
+#endif
 		bt_send_msg(inflight_bt_msg);
+	}
 
 out_unlock:
 	unlock(&bt.lock);
