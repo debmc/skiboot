@@ -461,30 +461,28 @@ static const struct lpc_error_entry lpc_error_table[] = {
 	LPC_ERROR(LPC_HC_IRQ_SYNC_ABNORM_ERR, OPAL_WRONG_STATE, "Got SYNC abnormal error."),
 };
 
-static int64_t lpc_probe_prepare(struct lpcm *lpc)
+static int64_t lpc_probe_prepare(struct lpcm *lpc, uint32_t *irqmask)
 {
 	const uint32_t irqmask_addr = lpc_reg_opb_base + LPC_HC_IRQMASK;
 	const uint32_t irqstat_addr = lpc_reg_opb_base + LPC_HC_IRQSTAT;
-	uint32_t irqmask;
 	int rc;
 
-	rc = opb_read(lpc, irqmask_addr, &irqmask, 4);
+	rc = opb_read(lpc, irqmask_addr, irqmask, 4);
 	if (rc)
 		return rc;
 
-	irqmask &= ~LPC_HC_IRQ_SYNC_NORESP_ERR;
-	rc = opb_write(lpc, irqmask_addr, irqmask, 4);
+	rc = opb_write(lpc, irqmask_addr, 0, 4);
 	if (rc)
 		return rc;
 
 	return opb_write(lpc, irqstat_addr, LPC_HC_IRQ_SYNC_NORESP_ERR, 4);
 }
 
-static int64_t lpc_probe_test(struct lpcm *lpc)
+static int64_t lpc_probe_test(struct lpcm *lpc, uint32_t irqmask)
 {
 	const uint32_t irqmask_addr = lpc_reg_opb_base + LPC_HC_IRQMASK;
 	const uint32_t irqstat_addr = lpc_reg_opb_base + LPC_HC_IRQSTAT;
-	uint32_t irqmask, irqstat;
+	uint32_t irqstat;
 	int64_t idx;
 	int rc;
 
@@ -496,11 +494,6 @@ static int64_t lpc_probe_test(struct lpcm *lpc)
 	if (rc)
 		return rc;
 
-	rc = opb_read(lpc, irqmask_addr, &irqmask, 4);
-	if (rc)
-		return rc;
-
-	irqmask |= LPC_HC_IRQ_SYNC_NORESP_ERR;
 	rc = opb_write(lpc, irqmask_addr, irqmask, 4);
 	if (rc)
 		return rc;
@@ -525,11 +518,12 @@ static int64_t __lpc_write(struct lpcm *lpc, enum OpalLPCAddressType addr_type,
 			   bool probe)
 {
 	uint32_t opb_base;
+	uint32_t irqmask;
 	int64_t rc;
 
 	lock(&lpc->lock);
 	if (probe) {
-		rc = lpc_probe_prepare(lpc);
+		rc = lpc_probe_prepare(lpc, &irqmask);
 		if (rc)
 			goto bail;
 	}
@@ -548,7 +542,7 @@ static int64_t __lpc_write(struct lpcm *lpc, enum OpalLPCAddressType addr_type,
 		goto bail;
 
 	if (probe)
-		rc = lpc_probe_test(lpc);
+		rc = lpc_probe_test(lpc, irqmask);
  bail:
 	unlock(&lpc->lock);
 	return rc;
@@ -612,11 +606,12 @@ static int64_t __lpc_read(struct lpcm *lpc, enum OpalLPCAddressType addr_type,
 			  bool probe)
 {
 	uint32_t opb_base;
+	uint32_t irqmask;
 	int64_t rc;
 
 	lock(&lpc->lock);
 	if (probe) {
-		rc = lpc_probe_prepare(lpc);
+		rc = lpc_probe_prepare(lpc, &irqmask);
 		if (rc)
 			goto bail;
 	}
@@ -635,7 +630,7 @@ static int64_t __lpc_read(struct lpcm *lpc, enum OpalLPCAddressType addr_type,
 		goto bail;
 
 	if (probe)
-		rc = lpc_probe_test(lpc);
+		rc = lpc_probe_test(lpc, irqmask);
  bail:
 	unlock(&lpc->lock);
 	return rc;
