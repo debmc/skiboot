@@ -44,7 +44,10 @@ enum flash_op {
 	FLASH_OP_READ,
 	FLASH_OP_WRITE,
 	FLASH_OP_ERASE,
+	FLASH_MAX
 };
+
+const char flash_string[FLASH_MAX][10]={"READ", "WRITE", "ERASE"};
 
 struct flash_async_info {
 	enum flash_op op;
@@ -328,7 +331,8 @@ static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unus
 	offset = flash->async.pos;
 	buf = flash->async.buf;
 	len = MIN(flash->async.len, flash->block_size*10);
-	printf("Flash poll op %d len %llu\n", flash->async.op, len);
+	prlog(PR_TRACE, "%s flash_poll transaction_id=%i flash->bl->flags=%i Async WORKING chunk len=%llu offset=%llu buf=%p\n",
+		flash_string[flash->async.op], flash->async.transaction_id, flash->bl->flags, len, offset, (void *)buf);
 
 	switch (flash->async.op) {
 	case FLASH_OP_READ:
@@ -376,6 +380,8 @@ static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unus
 		 * to be sure that we jump back out to Linux so that if this
 		 * very long we don't cause RCU or the scheduler to freak
 		 */
+		prlog(PR_TRACE, "%s flash_poll transaction_id=%i Async work REMAINS working chunk len=%llu pos=%llu buf=%p\n",
+			flash_string[flash->async.op], flash->async.transaction_id, flash->async.len, flash->async.pos, (void *)flash->async.buf);
 		schedule_timer(&flash->async.poller, 0);
 		return;
 	} else {
@@ -395,6 +401,8 @@ static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unus
 				 * or cases immediately following an unaligned window read/move (so slow)
 				 */
 				flash->bl->flags |= IN_PROGRESS;
+				prlog(PR_TRACE, "flash_poll RE-QUEUE transaction_id=%i flash->async.retry_counter=%i in_progress_schedule_delay=%i\n",
+					flash->async.transaction_id, flash->async.retry_counter, flash->async.in_progress_schedule_delay);
 				schedule_timer(&flash->async.poller, msecs_to_tb(flash->async.in_progress_schedule_delay));
 				return;
 			}
@@ -403,6 +411,8 @@ static void flash_poll(struct timer *t __unused, void *data, uint64_t now __unus
 		}
 	}
 
+	prlog(PR_TRACE, "%s flash_poll transaction_id=%i END len=%llu pos=%llu buf=%p rc=%i\n",
+		flash_string[flash->async.op], flash->async.transaction_id, flash->async.len, flash->async.pos, (void *)flash->async.buf, rc);
 	flash->bl->flags &= ~IN_PROGRESS;
 	flash->bl->flags &= ~ASYNC_REQUIRED;
 	/* release the flash before we allow next opal entry */
@@ -615,14 +625,13 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 
 	if (size > flash->size || offset >= flash->size
 			|| offset + size > flash->size) {
-		prlog(PR_DEBUG, "Requested flash op %d beyond flash size %" PRIu64 "\n",
+		prlog(PR_NOTICE, "Requested flash op %d beyond flash size %" PRIu64 "\n",
 				op, flash->size);
 		rc = OPAL_PARAMETER;
 		goto out;
 	}
 
 	len = MIN(size, flash->block_size*10);
-	printf("Flash op %d len %llu\n", op, len);
 	flash->async.op = op;
 	flash->async.token = token;
 	flash->async.buf = buf + len;
@@ -632,6 +641,8 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 	flash->async.in_progress_schedule_delay = FLASH_SCHEDULE_DELAY;
 	flash->bl->flags |= ASYNC_REQUIRED;
 	++flash->async.transaction_id;
+	prlog(PR_TRACE, "%s opal_flash_op transaction_id=%i flash->bl->flags=%i BEGIN total size=%llu Async WORKING chunk len=%llu offset=%llu buf=%p\n",
+		flash_string[op], flash->async.transaction_id, flash->bl->flags, size, len, offset, (void *)buf);
 
 	/*
 	 * These ops intentionally have no smarts (ecc correction or erase
@@ -669,11 +680,15 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 				goto out;
 			}
 			flash->bl->flags |= IN_PROGRESS;
+			prlog(PR_TRACE, "opal_flash_op RE-QUEUE transaction_id=%i flash->async.retry_counter=%i\n",
+				flash->async.transaction_id, flash->async.retry_counter);
 			schedule_timer(&flash->async.poller, msecs_to_tb(FLASH_SCHEDULE_DELAY));
 			/* Don't release the flash, we need to hold lock to continue transaction */
 			return OPAL_ASYNC_COMPLETION;
 		} else {
-			prlog(PR_ERR, "%s: Op %d failed with rc %d\n", __func__, op, rc);
+			/* PR_NOTICE since invalid requests can produce problem which is not ERR */
+			prlog(PR_NOTICE, "%s: %s (%d) failed rc=%d opal_flash_op transaction_id=%i\n", __func__,
+				flash_string[op], op, rc, flash->async.transaction_id);
 			rc = OPAL_HARDWARE;
 		}
 		goto out;
@@ -683,6 +698,8 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 		/* Work remains */
 		schedule_timer(&flash->async.poller, 0);
 		/* Don't release the flash, we need to hold lock to continue transaction */
+	        prlog(PR_TRACE, "%s opal_flash_op transaction_id=%i Async work REMAINS size=%llu working chunk len=%llu offset=%llu buf=%p\n",
+			flash_string[flash->async.op], flash->async.transaction_id, size, len, offset, (void *)buf);
 		return OPAL_ASYNC_COMPLETION;
 	} else {
 		/*
@@ -696,9 +713,19 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 		 */
 		opal_queue_msg(OPAL_MSG_ASYNC_COMP, NULL, NULL, flash->async.token, rc);
 	}
+        prlog(PR_TRACE, "%s opal_flash_op transaction_id=%i Async work COMPLETE size=%llu chunk len=%llu offset=%llu buf=%p\n",
+		flash_string[flash->async.op], flash->async.transaction_id, size, len, offset, (void *)buf);
 	rc = OPAL_ASYNC_COMPLETION;
 out:
 	flash_release(flash);
+	if (rc != OPAL_ASYNC_COMPLETION) {
+		prlog(PR_NOTICE, "%s opal_flash_op transaction_id=%i retry_counter=%i PROBLEM rc=%d size=%llu chunk len=%llu offset=%llu buf=%p\n",
+			flash_string[flash->async.op], flash->async.transaction_id, flash->async.retry_counter, rc, size, len, offset, (void *)buf);
+	} else {
+		prlog(PR_TRACE, "%s opal_flash_op transaction_id=%i END retry_counter=%i size=%llu chunk len=%llu offset=%llu buf=%p\n",
+			flash_string[flash->async.op], flash->async.transaction_id, flash->async.retry_counter, size, len, offset, (void *)buf);
+	}
+
 	flash->bl->flags &= ~IN_PROGRESS;
 	flash->bl->flags &= ~ASYNC_REQUIRED;
 	return rc;
@@ -901,7 +928,7 @@ static int flash_load_resource(enum resource_id id, uint32_t subid,
 		}
 
 		if (*len > ffs_part_size) {
-			prerror("FLASH: Cannot load %s. Content is larger than the partition\n",
+			prerror("Cannot load %s. Content is larger than the partition\n",
 					name);
 			rc = OPAL_PARAMETER;
 			goto out_free_ffs;
