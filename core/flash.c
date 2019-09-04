@@ -680,8 +680,8 @@ static int64_t opal_flash_op(enum flash_op op, uint64_t id, uint64_t offset,
 				goto out;
 			}
 			flash->bl->flags |= IN_PROGRESS;
-			prlog(PR_TRACE, "opal_flash_op RE-QUEUE transaction_id=%i flash->async.retry_counter=%i\n",
-				flash->async.transaction_id, flash->async.retry_counter);
+			prlog(PR_TRACE, "opal_flash_op RE-QUEUE transaction_id=%i flash->async.retry_counter=%i in_progress_schedule_delay=%i\n",
+				flash->async.transaction_id, flash->async.retry_counter, FLASH_SCHEDULE_DELAY);
 			schedule_timer(&flash->async.poller, msecs_to_tb(FLASH_SCHEDULE_DELAY));
 			/* Don't release the flash, we need to hold lock to continue transaction */
 			return OPAL_ASYNC_COMPLETION;

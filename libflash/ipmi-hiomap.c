@@ -58,10 +58,15 @@ static inline uint16_t bytes_to_blocks_align_up(struct ipmi_hiomap *ctx,
 /* Call under ctx->lock */
 static int hiomap_protocol_ready(struct ipmi_hiomap *ctx)
 {
-	if (!(ctx->bmc_state & HIOMAP_E_DAEMON_READY))
+	prlog(PR_TRACE, "%s ctx->bmc_state=%i\n", __func__, ctx->bmc_state);
+	if (!(ctx->bmc_state & HIOMAP_E_DAEMON_READY)) {
+		prlog(PR_NOTICE, "%s FLASH_ERR_DEVICE_GONE\n", __func__);
 		return FLASH_ERR_DEVICE_GONE;
-	if (ctx->bmc_state & HIOMAP_E_FLASH_LOST)
+	}
+	if (ctx->bmc_state & HIOMAP_E_FLASH_LOST) {
+		prlog(PR_NOTICE, "%s HIOMAP_E_FLASH_LOST\n", __func__);
 		return FLASH_ERR_AGAIN;
+	}
 
 	return 0;
 }
@@ -114,16 +119,27 @@ static int hiomap_queue_msg(struct ipmi_hiomap *ctx, struct ipmi_msg *msg)
 static int hiomap_window_valid(struct ipmi_hiomap *ctx, uint64_t pos,
 			        uint64_t len)
 {
-	if (ctx->bmc_state & HIOMAP_E_FLASH_LOST)
+	if (ctx->bmc_state & HIOMAP_E_FLASH_LOST) {
+		prlog(PR_NOTICE, "%s HIOMAP_E_FLASH_LOST\n", __func__);
 		return FLASH_ERR_AGAIN;
-	if (ctx->bmc_state & HIOMAP_E_PROTOCOL_RESET)
+	}
+	if (ctx->bmc_state & HIOMAP_E_PROTOCOL_RESET) {
+		prlog(PR_NOTICE, "%s HIOMAP_E_PROTOCOL_RESET\n", __func__);
 		return FLASH_ERR_AGAIN;
-	if (ctx->bmc_state & HIOMAP_E_WINDOW_RESET)
+	}
+	if (ctx->bmc_state & HIOMAP_E_WINDOW_RESET) {
+		prlog(PR_NOTICE, "%s HIOMAP_E_WINDOW_RESET\n", __func__);
 		return FLASH_ERR_AGAIN;
-	if (ctx->window_state == closed_window)
+	}
+	if (ctx->window_state == closed_window) {
+		prlog(PR_TRACE, "%s window_state=closed_window\n", __func__);
 		return FLASH_ERR_PARM_ERROR;
-	if (pos < ctx->current.cur_pos)
+	}
+	if (pos < ctx->current.cur_pos) {
+		prlog(PR_TRACE, "%s we need to move the window pos=%llu < ctx->current.cur_pos=0x%x\n",
+			__func__, pos, ctx->current.cur_pos);
 		return FLASH_ERR_PARM_ERROR;
+	}
 	if ((pos + len) > (ctx->current.cur_pos + ctx->current.size)) {
 		/*
 		 * we will compensate the proper values in the caller
@@ -330,8 +346,10 @@ static void ipmi_hiomap_cmd_cb(struct ipmi_msg *msg)
 	}
 
 	if (msg->data[1] != ctx->inflight_seq) {
-		prerror("Unmatched sequence number: wanted %u got %u\n",
-			ctx->inflight_seq, msg->data[1]);
+		prlog(PR_TRACE, "%s Unmatched ipmi sequence number: wanted %u got %u\n",
+			__func__,
+			ctx->inflight_seq,
+			msg->data[1]);
 		res->cc = IPMI_ERR_UNSPECIFIED;
 		ipmi_free_msg(msg);
 		return;
@@ -388,7 +406,9 @@ static void ipmi_hiomap_cmd_cb(struct ipmi_msg *msg)
 	case HIOMAP_C_ERASE:
 	case HIOMAP_C_RESET:
 		if (msg->resp_size != 2) {
-			prerror("%u: Unexpected response size: %u\n", msg->data[0],
+			prerror("%s %u: Unexpected response size: %u\n",
+				__func__,
+				msg->data[0],
 				msg->resp_size);
 			res->cc = IPMI_ERR_UNSPECIFIED;
 			ctx->cc = OPAL_HARDWARE;
@@ -403,8 +423,8 @@ static void ipmi_hiomap_cmd_cb(struct ipmi_msg *msg)
 		}
 		break;
 	default:
-		prlog(PR_WARNING, "Unimplemented command handler: %u\n",
-		      msg->data[0]);
+		prlog(PR_WARNING, "%s Unimplemented command handler: %u\n",
+		      __func__, msg->data[0]);
 		break;
 	};
 	ipmi_free_msg(msg);
@@ -684,8 +704,10 @@ static int hiomap_window_move(struct ipmi_hiomap *ctx, uint8_t command,
 
 	rc = hiomap_queue_msg(ctx, msg);
 
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s move queue msg failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
 	return 0;
 }
@@ -711,8 +733,10 @@ static int hiomap_mark_dirty(struct ipmi_hiomap *ctx, uint64_t offset,
 	ctx->cc = -1;
 	unlock(&ctx->lock);
 
-	if (state != write_window)
+	if (state != write_window) {
+		prlog(PR_NOTICE, "%s failed: state=%i\n", __func__, state);
 		return FLASH_ERR_PARM_ERROR;
+	}
 
 	req[0] = HIOMAP_C_MARK_DIRTY;
 	req[1] = dirty_seq;
@@ -728,11 +752,13 @@ static int hiomap_mark_dirty(struct ipmi_hiomap *ctx, uint64_t offset,
 
 	rc = hiomap_queue_msg(ctx, msg);
 
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s dirty queue msg failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
-	prlog(PR_DEBUG, "Marked flash dirty at 0x%" PRIx64 " for %" PRIu64 "\n",
-		offset, size);
+	prlog(PR_TRACE, "%s Start to mark flash dirty at pos %llu size %llu bytes ipmi seq=%i\n",
+		__func__, offset, size, dirty_seq);
 
 	return 0;
 }
@@ -755,8 +781,10 @@ static int hiomap_flush(struct ipmi_hiomap *ctx)
 	ctx->cc = -1;
 	unlock(&ctx->lock);
 
-	if (state != write_window)
+	if (state != write_window) {
+		prlog(PR_NOTICE, "%s failed: state=%i\n", __func__, state);
 		return FLASH_ERR_PARM_ERROR;
+	}
 
 	req[0] = HIOMAP_C_FLUSH;
 	req[1] = flush_seq;
@@ -767,10 +795,12 @@ static int hiomap_flush(struct ipmi_hiomap *ctx)
 
 	rc = hiomap_queue_msg(ctx, msg);
 
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s flush queue msg failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
-	prlog(PR_DEBUG, "Flushed writes\n");
+	prlog(PR_TRACE, "%s Start to flush writes ipmi seq=%i\n", __func__, flush_seq);
 
 	return 0;
 }
@@ -810,12 +840,15 @@ static int hiomap_ack(struct ipmi_hiomap *ctx, uint8_t ack)
 		         bmc_platform->sw->ipmi_oem_hiomap_cmd,
 			 ipmi_hiomap_cmd_cb, &ack_res, req, sizeof(req), 2);
 
+	prlog(PR_TRACE, "%s SENDING req[1]=%i\n", __func__, req[1]);
 	rc = hiomap_queue_msg(ctx, msg);
 	lock(&ctx->lock);
 	ctx->bl.flags = orig_flags;
 	unlock(&ctx->lock);
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s queue msg failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
 	rc = hiomap_wait_for_cc(ctx, &ctx->cc, &ctx->inflight_seq, IPMI_ACK_DEFAULT);
 	if (rc) {
@@ -824,7 +857,7 @@ static int hiomap_ack(struct ipmi_hiomap *ctx, uint8_t ack)
 		return rc;
 	}
 
-	prlog(PR_DEBUG, "Acked events: 0x%x\n", ack);
+	prlog(PR_NOTICE, "%s Acked events: 0x%x\n", __func__, ack);
 
 	return 0;
 }
@@ -850,8 +883,10 @@ static int hiomap_erase(struct ipmi_hiomap *ctx, uint64_t offset,
 	ctx->cc = -1;
 	unlock(&ctx->lock);
 
-	if (state != write_window)
+	if (state != write_window) {
+		prlog(PR_NOTICE, "%s failed: state=%i\n", __func__, state);
 		return FLASH_ERR_PARM_ERROR;
+	}
 
 	req[0] = HIOMAP_C_ERASE;
 	req[1] = erase_seq;
@@ -867,11 +902,14 @@ static int hiomap_erase(struct ipmi_hiomap *ctx, uint64_t offset,
 
 	rc = hiomap_queue_msg(ctx, msg);
 
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s erase queue msg failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
-	prlog(PR_DEBUG, "Erased flash at 0x%" PRIx64 " for %" PRIu64 "\n",
-	      offset, size);
+	prlog(PR_TRACE, "%s Erasing flash at pos %llu for size %llu\n",
+		__func__,
+		offset, size);
 
 	return 0;
 }
@@ -936,10 +974,17 @@ static void hiomap_event(uint8_t events, void *context)
 {
 	struct ipmi_hiomap *ctx = context;
 
-	prlog(PR_DEBUG, "Received events: 0x%x\n", events);
+	prlog(PR_NOTICE, "%s Received events: 0x%x ctx->bmc_state=%i\n",
+		__func__,
+		events,
+		ctx->bmc_state);
 
 	lock(&ctx->lock);
 	ctx->bmc_state = events | (ctx->bmc_state & HIOMAP_E_ACK_MASK);
+	prlog(PR_NOTICE, "%s Updated bmc_state Received events: 0x%x ctx->bmc_state=%i\n",
+		__func__,
+		events,
+		ctx->bmc_state);
 	unlock(&ctx->lock);
 }
 
@@ -952,7 +997,7 @@ static int lpc_window_read(struct ipmi_hiomap *ctx, uint32_t pos,
 	if ((ctx->current.lpc_addr + ctx->current.size) < (off + len))
 		return FLASH_ERR_PARM_ERROR;
 
-	prlog(PR_TRACE, "Reading at 0x%08x for 0x%08x offset: 0x%08x\n",
+	prlog(PR_TRACE, "LPC Reading at 0x%08x for 0x%08x offset: 0x%08x\n",
 	      pos, len, off);
 
 	while(len) {
@@ -1000,7 +1045,7 @@ static int lpc_window_write(struct ipmi_hiomap *ctx, uint32_t pos,
 	if ((ctx->current.lpc_addr + ctx->current.size) < (off + len))
 		return FLASH_ERR_PARM_ERROR;
 
-	prlog(PR_TRACE, "Writing at 0x%08x for 0x%08x offset: 0x%08x\n",
+	prlog(PR_TRACE, "LPC Writing at 0x%08x for 0x%08x offset: 0x%08x\n",
 	      pos, len, off);
 
 	while(len) {
@@ -1016,7 +1061,7 @@ static int lpc_window_write(struct ipmi_hiomap *ctx, uint32_t pos,
 			chunk = 1;
 		}
 		if (rc) {
-			prlog(PR_ERR, "lpc_write failure %d to FW 0x%08x\n", rc, off);
+			prlog(PR_ERR, "%s failure %d to FW 0x%08x\n", __func__, rc, off);
 			return rc;
 		}
 		len -= chunk;
@@ -1036,6 +1081,7 @@ static int ipmi_hiomap_handle_events(struct ipmi_hiomap *ctx)
 	lock(&ctx->lock);
 
 	status = ctx->bmc_state;
+	prlog(PR_TRACE, "%s status=%i\n", __func__, status);
 
 	/*
 	 * Immediately clear the ackable events to make sure we don't race to
@@ -1058,9 +1104,18 @@ static int ipmi_hiomap_handle_events(struct ipmi_hiomap *ctx)
 	 * Therefore it is enough to mark the window as closed to consider it
 	 * recovered.
 	 */
+	if (status & HIOMAP_E_PROTOCOL_RESET) {
+		prlog(PR_TRACE, "%s status=HIOMAP_E_PROTOCOL_RESET\n", __func__);
+	}
 
-	if (status & (HIOMAP_E_PROTOCOL_RESET | HIOMAP_E_WINDOW_RESET))
+	if (status & HIOMAP_E_WINDOW_RESET) {
+		prlog(PR_TRACE, "%s status=HIOMAP_E_WINDOW_RESET\n", __func__);
+	}
+
+	if (status & (HIOMAP_E_PROTOCOL_RESET | HIOMAP_E_WINDOW_RESET)) {
 		ctx->window_state = closed_window;
+		prlog(PR_TRACE, "%s closed_window\n", __func__);
+	}
 
 	unlock(&ctx->lock);
 
@@ -1078,21 +1133,22 @@ static int ipmi_hiomap_handle_events(struct ipmi_hiomap *ctx)
 	 * the BMC's cache must be valid if opening the window is successful.
 	 */
 	if (status & HIOMAP_E_ACK_MASK) {
+		prlog(PR_TRACE, "%s status=%i HIOMAP_E_ACK_MASK so TRY to ACK\n", __func__, status);
 		/* ACK is unversioned, can send it if the daemon is ready */
 		rc = hiomap_ack(ctx, status & HIOMAP_E_ACK_MASK);
 		if (rc) {
-			prlog(PR_DEBUG, "Failed to ack events: 0x%x\n",
-			      status & HIOMAP_E_ACK_MASK);
+			prlog(PR_NOTICE, "%s Failed to ack events rc=%i: status & HIOMAP_E_ACK_MASK=0x%x status=%i\n",
+			      __func__, rc, (status & HIOMAP_E_ACK_MASK), status);
 			goto restore;
 		}
 	}
 
 	if (status & HIOMAP_E_PROTOCOL_RESET) {
-		prlog(PR_INFO, "Protocol was reset\n");
+		prlog(PR_INFO, "%s Protocol was reset\n", __func__);
 
 		rc = hiomap_get_info(ctx);
 		if (rc) {
-			prerror("Failure to renegotiate after protocol reset\n");
+			prerror("%s Failure to renegotiate after protocol reset\n", __func__);
 			goto restore;
 		}
 
@@ -1102,7 +1158,7 @@ static int ipmi_hiomap_handle_events(struct ipmi_hiomap *ctx)
 			goto restore;
 		}
 
-		prlog(PR_INFO, "Restored state after protocol reset\n");
+		prlog(PR_INFO, "%s Restored state after protocol reset\n", __func__);
 	}
 
 	/*
@@ -1120,7 +1176,9 @@ restore:
 	 * than necessary, but never less than necessary.
 	 */
 	lock(&ctx->lock);
+	prlog(PR_TRACE, "%s PRE restore status=%i PRE ctx->bmc_state=%i rc=%i\n", __func__, status, ctx->bmc_state, rc);
 	ctx->bmc_state |= (status & HIOMAP_E_ACK_MASK);
+	prlog(PR_TRACE, "%s POST restored status=%i POST ctx->bmc_state=%i rc=%i\n", __func__, status, ctx->bmc_state, rc);
 	unlock(&ctx->lock);
 
 	return rc;
@@ -1136,15 +1194,17 @@ static int ipmi_hiomap_read(struct blocklevel_device *bl, uint64_t pos,
 
 	/* LPC is only 32bit */
 	if (pos > UINT_MAX || len > UINT_MAX)
-		return FLASH_ERR_PARM_ERROR;
+		return OPAL_PARAMETER;
 
 	ctx = container_of(bl, struct ipmi_hiomap, bl);
 
 	lock(&ctx->transaction_lock);
 
 	rc = ipmi_hiomap_handle_events(ctx);
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s ipmi_hiomap_handle_events failed: rc=%d\n", __func__, rc);
 		goto out;
+	}
 
 	lock(&ctx->lock);
 	if (ctx->bl.flags & IN_PROGRESS) {
@@ -1158,8 +1218,7 @@ static int ipmi_hiomap_read(struct blocklevel_device *bl, uint64_t pos,
 	}
 	unlock(&ctx->lock);
 
-	prlog(PR_TRACE, "Flash read at %#" PRIx64 " for %#" PRIx64 "\n", pos,
-	      len);
+	prlog(PR_TRACE, "Flash READ at pos %llu for %llu bytes\n", pos, len);
 	while (len > 0) {
 		lock(&ctx->lock);
 		state = ctx->window_state;
@@ -1243,8 +1302,10 @@ static int ipmi_hiomap_write(struct blocklevel_device *bl, uint64_t pos,
 	lock(&ctx->transaction_lock);
 
 	rc = ipmi_hiomap_handle_events(ctx);
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s ipmi_hiomap_handle_events failed: rc=%d\n", __func__, rc);
 		goto out;
+	}
 
 	lock(&ctx->lock);
 	if (ctx->bl.flags & IN_PROGRESS) {
@@ -1258,8 +1319,7 @@ static int ipmi_hiomap_write(struct blocklevel_device *bl, uint64_t pos,
 	}
 	unlock(&ctx->lock);
 
-	prlog(PR_TRACE, "Flash write at %#" PRIx64 " for %#" PRIx64 "\n", pos,
-	      len);
+	prlog(PR_TRACE, "Flash WRITE at pos %llu for %llu bytes\n", pos, len);
 	while (len > 0) {
 		lock(&ctx->lock);
 		state = ctx->window_state;
@@ -1364,14 +1424,17 @@ static int ipmi_hiomap_erase(struct blocklevel_device *bl, uint64_t pos,
 
 	/* LPC is only 32bit */
 	if (pos > UINT_MAX || len > UINT_MAX)
-		return FLASH_ERR_PARM_ERROR;
+		return OPAL_PARAMETER;
 
 	ctx = container_of(bl, struct ipmi_hiomap, bl);
 	lock(&ctx->transaction_lock);
 
 	rc = ipmi_hiomap_handle_events(ctx);
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s ipmi_hiomap_handle_events failed: rc=%d\n", __func__, rc);
 		goto out;
+	}
+
 
 	lock(&ctx->lock);
 	if (ctx->bl.flags & IN_PROGRESS) {
@@ -1383,8 +1446,8 @@ static int ipmi_hiomap_erase(struct blocklevel_device *bl, uint64_t pos,
 	}
 	unlock(&ctx->lock);
 
-	prlog(PR_TRACE, "Flash erase at 0x%08x for 0x%08x\n", (u32) pos,
-	      (u32) len);
+	prlog(PR_TRACE, "Flash ERASE at pos %llu for %llu bytes\n", pos, len);
+
 	while (len > 0) {
 		lock(&ctx->lock);
 		state = ctx->window_state;
@@ -1468,12 +1531,16 @@ static int ipmi_hiomap_get_flash_info(struct blocklevel_device *bl,
 	lock(&ctx->transaction_lock);
 
 	rc = ipmi_hiomap_handle_events(ctx);
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s ipmi_hiomap_handle_events failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
 	rc = hiomap_get_flash_info(ctx);
-	if (rc)
+	if (rc) {
+		prlog(PR_NOTICE, "%s hiomap_get_flash failed: rc=%d\n", __func__, rc);
 		return rc;
+	}
 
 	ctx->bl.erase_mask = ctx->erase_granule - 1;
 
@@ -1520,26 +1587,28 @@ int ipmi_hiomap_init(struct blocklevel_device **bl)
 	/* Ack all pending ack-able events to avoid spurious failures */
 	rc = hiomap_ack(ctx, HIOMAP_E_ACK_MASK);
 	if (rc) {
-		prlog(PR_DEBUG, "Failed to ack events: 0x%x\n",
-		      HIOMAP_E_ACK_MASK);
+		prlog(PR_NOTICE, "%s Failed to ack events: 0x%x\n",
+		      __func__, HIOMAP_E_ACK_MASK);
 		goto err;
 	}
 
 	rc = ipmi_sel_register(CMD_OP_HIOMAP_EVENT, hiomap_event, ctx);
-	if (rc < 0)
+	if (rc < 0) {
+		prerror("%s Failed ipmi_sel_register: %d\n", __func__, rc);
 		goto err;
+	}
 
 	/* Negotiate protocol behaviour */
 	rc = hiomap_get_info(ctx);
 	if (rc) {
-		prerror("Failed to get hiomap parameters: %d\n", rc);
+		prerror("%s Failed to get hiomap parameters: %d\n", __func__, rc);
 		goto err;
 	}
 
 	/* Grab the flash parameters */
 	rc = hiomap_get_flash_info(ctx);
 	if (rc) {
-		prerror("Failed to get flash parameters: %d\n", rc);
+		prerror("%s Failed to get flash parameters: %d\n", __func__, rc);
 		goto err;
 	}
 
