@@ -504,12 +504,16 @@ static int64_t lpc_probe_test(struct lpcm *lpc, uint32_t irqmask)
 	/* Ensure we can perform a valid lookup in the error table */
 	idx = LPC_ERROR_IDX(irqstat);
 	if (idx < 0 || idx >= ARRAY_SIZE(lpc_error_table)) {
-		prerror("LPC bus error translation failed with status 0x%x\n",
-			irqstat);
+		prlog(PR_ERR, "%s bus error translation failed with idx=%llu irqstat=0x%x\n",
+			__func__, idx, irqstat);
 		return OPAL_PARAMETER;
 	}
 
 	rc = lpc_error_table[idx].rc;
+	/* purpose here is to log for any anomalies, something other than the expected NORESP_ERR */
+	if (idx != LPC_ERROR_IDX(LPC_HC_IRQ_SYNC_NORESP_ERR)) {
+		prlog(PR_NOTICE, "%s LOOKUP rc=0x%x idx=%llu\n", __func__, rc, idx);
+	}
 	return rc;
 }
 
@@ -1032,6 +1036,10 @@ static void lpc_dispatch_err_irqs(struct lpcm *lpc, uint32_t irqs)
 	/* Find and report the error */
 	err = &lpc_error_table[idx];
 	lpc_bus_err_count++;
+	/* purpose here is to log for any anomalies, e.g. hardware issues */
+	prlog(PR_NOTICE, "%s lpc_bus_err_count=%i\n",
+		__func__,
+		lpc_bus_err_count);
 	if (manufacturing_mode && (lpc_bus_err_count > LPC_BUS_DEGRADED_PERF_THRESHOLD))
 		info = &e_info(OPAL_RC_LPC_SYNC_PERF);
 	else
