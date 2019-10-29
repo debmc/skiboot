@@ -518,7 +518,7 @@ static void bt_poll(struct timer *t __unused, void *data __unused,
 	bt_send_and_unlock();
 
 	schedule_timer(&bt.poller,
-		       bt.irq_ok ? TIMER_POLL : msecs_to_tb(BT_DEFAULT_POLL_MS));
+		       bt.irq_ok ? msecs_to_tb(BT_DEFAULT_POLL_MS) : TIMER_POLL);
 }
 
 static void bt_ipmi_poll(void)
